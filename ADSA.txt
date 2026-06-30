@@ -1,13 +1,13 @@
 // ╔══════════════════════════════════════════════════════════════════════════════╗
-// ║  ABSOLUTE DOLLAR AGENT — ADSA v7.0                                 ║
+// ║  ABSOLUTE DOLLAR AGENT — ADSA v7.1                                 ║
 // ║  Augmented Intelligence Protocol | Super Admin Edition                       ║
 // ║  © Absolute Dollar Intelligence 2026 | All Rights Reserved                  ║
 // ╠══════════════════════════════════════════════════════════════════════════════╣
 // ║  CODENAME  : ABSOLUTE DOLLAR AGENT (ADA)                          ║
 // ║  EDITION   : Super Admin — Invite Only                                      ║
-// ║  VERSION   : Pine Script v6 — Supreme Merge Build                          ║
+// ║  VERSION   : Pine Script v6 — TronJarvis Merge Build                       ║
 // ╠══════════════════════════════════════════════════════════════════════════════╣
-// ║  ARCHITECTURE (17 Subsystems):                                               ║
+// ║  ARCHITECTURE (19 Subsystems):                                               ║
 // ║  [1]  Fractal 4-Layer Consensus (Sovereign/Anchor/Filter/Exec)              ║
 // ║  [2]  Composite 5-Timeframe Scoring Engine (+15 to -15)                    ║
 // ║  [3]  Glass Box Alert Architecture (rich reasoning per event)               ║
@@ -25,6 +25,19 @@
 // ║  [15] Daily Report Engine (full trade log + ML data block)                  ║
 // ║  [16] *** NEW: Live Dollar P&L Tracker (quote-currency, per-bar update)    ║
 // ║  [17] *** NEW: PDH/PDL Context Engine + Tree-Format AI Narrative            ║
+// ║  [18] *** NEW: Episodic Memory Engine (TronJarvis Layer — FIFO-75, Glass Box)║
+// ║  [19] *** NEW: KNN Advisory Engine (K=5, weighted feature space, edge read)  ║
+// ╠══════════════════════════════════════════════════════════════════════════════╣
+// ║  MERGE LOG v7.1 — TRONJARVIS LAYER                                          ║
+// ║  [+] Episodic Memory Engine (Section 31): FIFO-capped var arrays (cap=75)   ║
+// ║      Record score/sync/atr/sovereign/direction at entry. Outcome ratchets    ║
+// ║      TP1→TP2→TP3. SL=0 if TP1 never reached. NOT daily-reset.               ║
+// ║  [+] KNN Advisory Engine (Section 32): K=5 nearest closed trades in weighted ║
+// ║      feature space (score×1.0 sync×2.0 atr×1.5 sovereign×1.5). Emits        ║
+// ║      outcome rates + edge read. Score bracket table. barstate.islast only.   ║
+// ║  [+] TronJarvis Memory panel in dashboard (Section 23)                       ║
+// ║  [+] KNN advisory injected into War Room _narrative (Section 26)             ║
+// ║  Glass Box: total_score READ-ONLY. TronJarvis annotates, never reweights.    ║
 // ╠══════════════════════════════════════════════════════════════════════════════╣
 // ║  MERGE LOG v7.0 — SUPREME AGENT ADDITIONS                                  ║
 // ║  [+] Live Dollar P&L on active trade (price_diff × position_size ×        ║
@@ -453,6 +466,21 @@ _tg_json(string chat_id, string msg) =>
     s       := str.replace_all(s, "\n", "\\n")
     s       := str.replace_all(s, "\t", " ")
     "{\"chat_id\":\"" + chat_id + "\",\"text\":\"" + s + "\"}"
+
+
+// ── TRONJARVIS MEMORY HELPERS ─────────────────────────────────────────────────
+_mem_encode_sync(string phase) =>
+    str.contains(phase, "FULLY ALIGNED") ? 4.0 :
+     str.contains(phase, "L4 PULLBACK")  ? 3.0 :
+     str.contains(phase, "L3 PULLBACK")  ? 2.0 :
+     str.contains(phase, "L2 PULLBACK")  ? 1.0 : 0.0
+
+_mem_encode_atr(string atr_s) =>
+    atr_s == "High" ? 1.0 : atr_s == "Low" ? -1.0 : 0.0
+
+_score_bracket(float sc) =>
+    float a = math.abs(sc)
+    a >= 13.0 ? 4 : a >= 10.0 ? 3 : a >= 6.0 ? 2 : a >= 3.0 ? 1 : 0
 
 // ══════════════════════════════════════════════════════════════════════════════
 // SECTION 4 — VOLUME PROFILE ENGINE
@@ -2010,6 +2038,157 @@ if dpt_active_idx >= 0 and dpt_active_idx < array.size(dpt_dir)
         dpt_active_idx := -1
 
 // ══════════════════════════════════════════════════════════════════════════════
+// SECTION 31 — EPISODIC MEMORY ENGINE (TronJarvis Layer — Glass Box)
+// Each trade entry recorded as feature vector. Outcome ratchets up as TPs hit.
+// FIFO-capped at 75. NOT daily-reset. total_score READ-ONLY. Annotates only.
+// ══════════════════════════════════════════════════════════════════════════════
+const int MEM_CAP = 75
+var array<float> mem_score   = array.new<float>()  // score at entry
+var array<float> mem_sync    = array.new<float>()  // sync 0-4
+var array<float> mem_atr_enc = array.new<float>()  // atr 1/0/-1
+var array<float> mem_sov     = array.new<float>()  // sovereign 1/0/-1
+var array<float> mem_dir     = array.new<float>()  // 1=long -1=short
+var array<float> mem_outcome = array.new<float>()  // -1=open 0=SL 1=TP1 2=TP2 3=TP3
+var bool mem_trade_open = false
+
+if (buy_signal_confirmed or sell_signal_confirmed) and barstate.isconfirmed
+    if array.size(mem_score) >= MEM_CAP
+        array.shift(mem_score)
+        array.shift(mem_sync)
+        array.shift(mem_atr_enc)
+        array.shift(mem_sov)
+        array.shift(mem_dir)
+        array.shift(mem_outcome)
+    array.push(mem_score,    total_score)
+    array.push(mem_sync,     _mem_encode_sync(agent_sync_phase))
+    array.push(mem_atr_enc,  _mem_encode_atr(atrHL))
+    array.push(mem_sov,      float(sovereign_state))
+    array.push(mem_dir,      buy_signal_confirmed ? 1.0 : -1.0)
+    array.push(mem_outcome,  -1.0)
+    mem_trade_open := true
+
+if mem_trade_open and barstate.isconfirmed
+    int _ml = array.size(mem_outcome) - 1
+    if _ml >= 0
+        if tp1_alert_event and array.get(mem_outcome, _ml) < 1.0
+            array.set(mem_outcome, _ml, 1.0)
+        if tp2_alert_event and array.get(mem_outcome, _ml) < 2.0
+            array.set(mem_outcome, _ml, 2.0)
+        if tp3_alert_event
+            array.set(mem_outcome, _ml, 3.0)
+            mem_trade_open := false
+        if holder_exit_event
+            array.set(mem_outcome, _ml, math.max(array.get(mem_outcome, _ml), 3.0))
+            mem_trade_open := false
+        if sl_alert_event
+            if array.get(mem_outcome, _ml) < 1.0
+                array.set(mem_outcome, _ml, 0.0)
+            mem_trade_open := false
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SECTION 32 — KNN ADVISORY ENGINE (TronJarvis Layer — Glass Box)
+// K=5 nearest closed trades in weighted feature space. Emits outcome rates +
+// edge read. Score bracket table. barstate.islast only. READ-ONLY annotation.
+// Weights: score×1.0  sync×2.0  atr×1.5  sovereign×1.5
+// ══════════════════════════════════════════════════════════════════════════════
+const int KNN_K   = 5
+const int KNN_MIN = 5
+var string knn_advisory = " Memory: Building..."
+var string knn_bracket  = ""
+
+if barstate.islast
+    int n = array.size(mem_score)
+    int n_closed = 0
+    for i = 0 to n - 1
+        if array.get(mem_outcome, i) >= 0.0
+            n_closed += 1
+
+    array<int> br_tot = array.new<int>(5, 0)
+    array<int> br_tp2 = array.new<int>(5, 0)
+    array<int> br_tp3 = array.new<int>(5, 0)
+    for i = 0 to n - 1
+        float oc = array.get(mem_outcome, i)
+        if oc >= 0.0
+            int br = _score_bracket(array.get(mem_score, i))
+            array.set(br_tot, br, array.get(br_tot, br) + 1)
+            if oc >= 2.0
+                array.set(br_tp2, br, array.get(br_tp2, br) + 1)
+            if oc >= 3.0
+                array.set(br_tp3, br, array.get(br_tp3, br) + 1)
+
+    array<string> br_labels = array.from("0-2","3-5","6-9","10-12","13-15")
+    string br_rows = " Sc   |N  |TP2%|TP3%\n"
+    bool any_br = false
+    for b = 0 to 4
+        int tot = array.get(br_tot, b)
+        if tot > 0
+            any_br := true
+            int tp2c = array.get(br_tp2, b)
+            int tp3c = array.get(br_tp3, b)
+            br_rows += " " + array.get(br_labels, b) + " |" + str.tostring(tot) + " |" +
+                 str.tostring(math.round(float(tp2c)/float(tot)*100)) + "% |" +
+                 str.tostring(math.round(float(tp3c)/float(tot)*100)) + "%\n"
+    knn_bracket := any_br ? br_rows : ""
+
+    if n_closed < KNN_MIN
+        knn_advisory := " Memory: " + str.tostring(n_closed) + " closed — need " + str.tostring(KNN_MIN) + " to run KNN"
+    else
+        array<float> knn_dists   = array.new<float>()
+        array<float> knn_results = array.new<float>()
+        float q_sc = total_score
+        float q_sy = _mem_encode_sync(agent_sync_phase)
+        float q_at = _mem_encode_atr(atrHL)
+        float q_sv = float(sovereign_state)
+        for i = 0 to n - 1
+            float oc = array.get(mem_outcome, i)
+            if oc >= 0.0
+                float sc_d = array.get(mem_score,   i) - q_sc
+                float sy_d = array.get(mem_sync,    i) - q_sy
+                float at_d = array.get(mem_atr_enc, i) - q_at
+                float sv_d = array.get(mem_sov,     i) - q_sv
+                float ds   = sc_d*sc_d*1.0 + sy_d*sy_d*2.0 + at_d*at_d*1.5 + sv_d*sv_d*1.5
+                array.push(knn_dists,   ds)
+                array.push(knn_results, oc)
+        int nd = array.size(knn_dists)
+        int ak = math.min(KNN_K, nd)
+        array<bool> used = array.new<bool>(nd, false)
+        int c_tp1 = 0
+        int c_tp2 = 0
+        int c_tp3 = 0
+        int c_sl  = 0
+        for pick = 0 to ak - 1
+            float min_d = 1.0e10
+            int   min_i = 0
+            for j = 0 to nd - 1
+                if not array.get(used, j) and array.get(knn_dists, j) < min_d
+                    min_d := array.get(knn_dists, j)
+                    min_i := j
+            array.set(used, min_i, true)
+            float oc = array.get(knn_results, min_i)
+            if oc >= 3.0
+                c_tp3 += 1
+            else if oc >= 2.0
+                c_tp2 += 1
+            else if oc >= 1.0
+                c_tp1 += 1
+            else
+                c_sl  += 1
+        float kf    = float(ak)
+        int pct_tp1 = math.round(float(c_tp1+c_tp2+c_tp3)/kf*100)
+        int pct_tp2 = math.round(float(c_tp2+c_tp3)/kf*100)
+        int pct_tp3 = math.round(float(c_tp3)/kf*100)
+        int pct_sl  = math.round(float(c_sl)/kf*100)
+        string edge = pct_tp3 >= 60 ? "→ PRESS TO TP3" :
+             pct_tp2 >= 60 ? "→ SECURE AT TP2" :
+             pct_tp1 >= 60 ? "→ TP1 ONLY / CAUTIOUS" :
+             pct_sl  >= 60 ? "→ LOW EDGE / STAND ASIDE" : "→ STANDARD PLAN"
+        knn_advisory :=
+             " 🧠 K=" + str.tostring(ak) + " of " + str.tostring(n_closed) + " closed trades\n" +
+             " TP1≥:" + str.tostring(pct_tp1) + "%  TP2≥:" + str.tostring(pct_tp2) +
+             "%  TP3:" + str.tostring(pct_tp3) + "%  SL:" + str.tostring(pct_sl) + "%\n" +
+             " " + edge
+
+// ══════════════════════════════════════════════════════════════════════════════
 // SECTION 23 — SUPREME AGENT DASHBOARD
 // ══════════════════════════════════════════════════════════════════════════════
 
@@ -2100,6 +2279,10 @@ if dashOn and not na(dashTable) and barstate.islast
          L +
          " 💡 AGENT ADVICE" + D +
          " " + ai_advice + D +
+         L +
+         " 🤖 TRONJARVIS MEMORY" + D +
+         knn_advisory + D +
+         (knn_bracket != "" ? knn_bracket + D : "") +
          L +
          " 💧 LIQUIDITY" + D +
          " " + liq_bias + D +
@@ -2398,6 +2581,9 @@ if useAgentAlerts and barstate.isconfirmed and (trigger_signal or silence_broadc
              "5-LAYER TREE\n" +
              tree_narrative +
              _SEP2 + "\n" +
+             "🤖 TRONJARVIS MEMORY\n" +
+             knn_advisory + "\n" +
+             _SEP2 + "\n" +
              "💡 AGENT ADVICE\n" +
              ai_advice + "\n" +
              "PF: " + (pip_pf==0.0?"—":str.tostring(math.min(pip_pf,99.9),"#.##")) +
@@ -2409,7 +2595,7 @@ if useAgentAlerts and barstate.isconfirmed and (trigger_signal or silence_broadc
     string prem = ""
     prem += _SEP + "\n"
     prem += "🔥 ABSOLUTE DOLLAR — WAR ROOM\n"
-    prem += "Supreme Agent ADSA v7.0\n"
+    prem += "Supreme Agent ADSA v7.1\n"
     prem += _SEP + "\n"
     prem += "📊 Asset   : " + _sym + "\n"
     prem += "💰 Price   : " + _p(close) + "\n"
@@ -2441,7 +2627,7 @@ if useAgentAlerts and barstate.isconfirmed and (trigger_signal or silence_broadc
     string pub = ""
     pub += _SEP + "\n"
     pub += "🤖 ABSOLUTE DOLLAR — ATM AGENT\n"
-    pub += "Supreme Agent ADSA v7.0\n"
+    pub += "Supreme Agent ADSA v7.1\n"
     pub += _SEP + "\n"
     pub += "📊 Asset   : " + _sym + "\n"
     pub += "🌍 Session : " + current_session + "\n"
@@ -2716,6 +2902,30 @@ plot(trade_active and (sl_alert_event or holder_exit_event) ? 1 : 0, title="Trad
 //     Section 23: Replaces flat "R= V= F=" rows in dashboard
 //     Section 26: Replaces flat table in _narrative Telegram block
 //
+// ══════════════════════════════════════════════════════════════════════════════
+// ADSA v7.1 MERGE — TRONJARVIS LAYER ADDITIONS
+// ══════════════════════════════════════════════════════════════════════════════
+//   ADDITION 4 — Episodic Memory Engine (Section 31)
+//     Section 3 : _mem_encode_sync(), _mem_encode_atr(), _score_bracket() helpers
+//     Section 31: FIFO-capped var arrays (cap=75) for score/sync/atr/sovereign/dir/outcome
+//                 Entry recorded on buy_signal_confirmed / sell_signal_confirmed
+//                 Outcome ratchets: open(-1) → TP1(1) → TP2(2) → TP3(3) | SL(0)
+//                 SL only records 0 if TP1 was never reached (best outcome preserved)
+//                 NOT cleared in _new_trading_day — persists across sessions
+//                 total_score READ-ONLY: TronJarvis annotates, never reweights
+//
+//   ADDITION 5 — KNN Advisory Engine (Section 32)
+//     Section 32: K=5 nearest-neighbor lookup in closed trade memory
+//                 Weighted feature space: score×1.0 sync×2.0 atr×1.5 sovereign×1.5
+//                 Selection sort O(k×n), k=5, n≤75 — within Pine compute budget
+//                 Runs only on barstate.islast (display refresh only, no signal logic)
+//                 Emits: TP1%/TP2%/TP3%/SL% outcome rates + edge directive string
+//                 Score bracket table: Sc|N|TP2%|TP3% across 5 brackets (0-2/3-5/6-9/10-12/13-15)
+//                 Minimum 5 closed trades required before KNN activates
+//     Section 23: TronJarvis Memory panel added to dashboard after AGENT ADVICE
+//     Section 26: knn_advisory injected into _narrative War Room block
+//
+// ══════════════════════════════════════════════════════════════════════════════
 // TELEGRAM SETUP (unchanged from v6.1):
 //   Settings > Telegram Broadcast > paste Chat IDs > toggle ON
 //   TradingView Alert: Message = {{alert_message}}
